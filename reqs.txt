@@ -1,0 +1,4 @@
+numpy == 2.4.0 
+pandas == 2.3.3
+tensorflow ==2.20.0
+scikit-learn==1.8.0 
