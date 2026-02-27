@@ -1,4 +1,20 @@
-.venv/
+# Python
 __pycache__/
-chest_xray/
+*.pyc
+.venv/
+
+# Model files
 *.h5
+*.keras
+*.pkl
+
+# Database
+*.db
+
+# Uploads & Results
+uploads/
+results/
+
+# OS
+.DS_Store
+Thumbs.db
