@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Login</h1>
+  <p class="muted">Administrator access to dashboard, scanning and reports.</p>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/login" class="form">
+    <label class="label">Username</label>
+    <input class="input" type="text" name="username" required>
+
+    <label class="label">Password</label>
+    <input class="input" type="password" name="password" required>
+
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Login</button>
+    </div>
+  </form>
+
+  <div class="fineprint">
+    Demo creds (change later): <code>admin</code> / <code>admin123</code>
+  </div>
+</section>
+{% endblock %}

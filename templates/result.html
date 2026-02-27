@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% set nav = true %}
+{% set single = true %}
+{% block content %}
+<section class="card">
+  {% if not_found %}
+    <h1>Result not found</h1>
+    <p class="muted">That scan ID does not exist.</p>
+    <a class="btn btn-primary" href="/dashboard">Back to dashboard</a>
+  {% else %}
+    <h1>Result</h1>
+    <p class="muted">Scan ID: <b>{{ scan.id }}</b> • {{ scan.timestamp }}</p>
+
+    <div class="result-box">
+      <div class="result-label {{ 'bad' if scan.predicted_label=='PNEUMONIA' else 'good' }}">
+        {{ scan.predicted_label }}
+      </div>
+
+      <div class="muted">Confidence: <b>{{ conf }}%</b></div>
+      <div class="muted">P(Pneumonia): <b>{{ p_percent }}%</b></div>
+
+      <div class="meter">
+        <div class="meter-head">
+          <span>Probability Meter</span>
+          <span class="muted">0% → 100%</span>
+        </div>
+        <div class="meter-track">
+          <div class="meter-fill" style="width: {{ p_percent }}%;"></div>
+        </div>
+        <div class="meter-scale">
+          <span>Normal</span><span>Pneumonia</span>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+      <div class="muted small">
+        File: <code>{{ scan.filename }}</code>
+      </div>
+    </div>
+
+    <div class="actions">
+      <a class="btn btn-primary" href="/scan">New Scan</a>
+      <a class="btn btn-secondary" href="/reports">View History</a>
+    </div>
+
+    <div class="fineprint">
+      <b>Disclaimer:</b> Not a medical diagnosis. Use for academic purposes only.
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

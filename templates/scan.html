@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% set nav = true %}
+{% block content %}
+<section class="card">
+  <h1>Upload / Prediction</h1>
+  <p class="muted">Upload a chest X-ray to classify NORMAL vs PNEUMONIA.</p>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <form id="uploadForm" action="/predict" method="post" enctype="multipart/form-data">
+    <div id="dropzone" class="dropzone">
+      <input id="fileInput" type="file" name="file" accept="image/*" required />
+      <div class="dz-inner">
+        <div class="dz-icon">⬆️</div>
+        <div class="dz-title">Drag & drop X-ray here</div>
+        <div class="dz-sub">or click to browse (JPG/PNG/WEBP, max 10MB)</div>
+      </div>
+    </div>
+
+    <div class="preview-wrap">
+      <div class="preview-title">Preview</div>
+      <div class="preview">
+        <img id="previewImg" alt="Preview" />
+        <div id="previewPlaceholder" class="preview-placeholder">No image selected yet.</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Run Prediction</button>
+      <button id="clearBtn" class="btn btn-secondary" type="button">Clear</button>
+    </div>
+
+    <div class="fineprint">
+      <b>Disclaimer:</b> Academic demonstration only — not a clinical diagnosis.
+    </div>
+  </form>
+</section>
+
+<section class="card card-side">
+  <h2>Workflow</h2>
+  <ul class="list">
+    <li>Upload X-ray image</li>
+    <li>Preprocessing: resize 224×224, normalize</li>
+    <li>CNN predicts probability</li>
+    <li>System stores result in SQLite</li>
+  </ul>
+  <div class="hr"></div>
+  <h2>Where results go</h2>
+  <ul class="list">
+    <li>Uploads saved in <code>uploads/</code></li>
+    <li>History saved in <code>data/pneumoscan.db</code></li>
+  </ul>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/app.js"></script>
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% set nav = true %}
+{% set single = true %}
+{% block content %}
+<section class="card">
+  <h1>Reports / History</h1>
+  <p class="muted">Filter, review, and export prediction history.</p>
+
+  <form class="filters" method="get" action="/reports">
+    <div>
+      <label class="label">Label</label>
+      <select class="input" name="label">
+        <option value="" {% if not filter_label %}selected{% endif %}>All</option>
+        <option value="NORMAL" {% if filter_label=="NORMAL" %}selected{% endif %}>NORMAL</option>
+        <option value="PNEUMONIA" {% if filter_label=="PNEUMONIA" %}selected{% endif %}>PNEUMONIA</option>
+      </select>
+    </div>
+    <div>
+      <label class="label">Search filename</label>
+      <input class="input" type="text" name="q" value="{{ filter_q }}" placeholder="e.g. 20260218_...">
+    </div>
+    <div class="filters-actions">
+      <button class="btn btn-primary" type="submit">Apply</button>
+      <a class="btn btn-secondary" href="/reports">Reset</a>
+    </div>
+  </form>
+
+  <div class="actions" style="margin-top:10px;">
+    <a class="btn btn-secondary"
+       href="/reports/export?label={{ filter_label }}&q={{ filter_q }}">Export CSV</a>
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th><th>Time</th><th>File</th><th>Label</th><th>P(Pneu)</th><th>Confidence</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td class="muted">{{ r.timestamp }}</td>
+          <td><code>{{ r.filename }}</code></td>
+          <td>
+            <span class="pill {{ 'bad' if r.predicted_label=='PNEUMONIA' else 'good' }}">
+              {{ r.predicted_label }}
+            </span>
+          </td>
+          <td class="muted">{{ (r.p_pneumonia*100) | round(2) }}%</td>
+          <td class="muted">{{ r.confidence_percent | round(2) }}%</td>
+          <td><a class="link" href="/result/{{ r.id }}">View</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

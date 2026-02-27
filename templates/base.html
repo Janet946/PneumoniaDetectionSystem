@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{ title or "PneumoScan" }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">🫁</div>
+      <div>
+        <div class="brand-title">PneumoScan</div>
+        <div class="brand-subtitle">Pneumonia Detection System</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      {% if nav %}
+        <a href="/dashboard">Dashboard</a>
+        <a href="/scan">Scan</a>
+        <a href="/reports">Reports</a>
+        <a href="/logout" class="danger">Logout</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="container {% if single %}single{% endif %}">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>© 2026 PneumoScan</span>
+    <span class="muted">FastAPI + TensorFlow + SQLite</span>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

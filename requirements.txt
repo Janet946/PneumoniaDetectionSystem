@@ -1,0 +1,13 @@
+numpy == 2.4.0 
+pandas == 2.3.3
+tensorflow ==2.20.0
+scikit-learn==1.8.0 
+fastapi
+uvicorn
+python-multipart
+jinja2
+itsdangerous
+tensorflow
+pillow
+numpy
+pandas

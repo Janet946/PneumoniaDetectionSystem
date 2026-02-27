@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% set nav = true %}
+{% set single = true %}
+{% block content %}
+<section class="card">
+  <h1>Dashboard</h1>
+  <p class="muted">System overview (latest statistics and recent scans).</p>
+
+  <div class="grid3">
+    <div class="stat">
+      <div class="stat-title">Total Scans</div>
+      <div class="stat-value">{{ total_scans }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Pneumonia Scans</div>
+      <div class="stat-value">{{ pneumonia_scans }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Pneumonia Rate</div>
+      <div class="stat-value">{{ pneumonia_rate }}%</div>
+    </div>
+  </div>
+
+  <div class="hr"></div>
+
+  <h2>Recent Scans</h2>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th><th>Time</th><th>File</th><th>Label</th><th>Confidence</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td class="muted">{{ r.timestamp }}</td>
+          <td><code>{{ r.filename }}</code></td>
+          <td>
+            <span class="pill {{ 'bad' if r.predicted_label=='PNEUMONIA' else 'good' }}">
+              {{ r.predicted_label }}
+            </span>
+          </td>
+          <td class="muted">{{ r.confidence_percent|round(2) }}%</td>
+          <td><a class="link" href="/result/{{ r.id }}">View</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
