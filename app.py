@@ -4,8 +4,7 @@ import csv
 import sqlite3
 from datetime import datetime
 from typing import Optional
-from itsdangerous import URLSafeSerializer, BadSignature
-from passlib.context import CryptContext
+from itsdangerous import URLSafeSerializer
 
 import numpy as np
 import tensorflow as tf
@@ -15,6 +14,13 @@ from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+
 
 # ============================================================
 # CONFIG
@@ -31,12 +37,13 @@ DB_PATH = os.path.join(DATA_DIR, "pneumoscan.db")
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_FILE_MB = 10
 
-# Session secret – CHANGE THIS to a long random string in production!
+# Demo admin credentials (change before submission)
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "admin123"
+
+# Session secret (change to a long random string)
 SESSION_SECRET = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
 serializer = URLSafeSerializer(SESSION_SECRET)
-
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -89,12 +96,12 @@ def db_init():
         )
     """)
 
-    # Admins table (for multiple users)
+    # NEW: Admins table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL   -- stores bcrypt hash
+            password TEXT NOT NULL
         )
     """)
 
@@ -104,36 +111,15 @@ def db_init():
 
 db_init()
 
-
-def create_initial_admin():
-    """Create a default admin if no users exist."""
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS count FROM admins")
-    if cur.fetchone()["count"] == 0:
-        # Default credentials: admin / admin123
-        hashed = pwd_context.hash("admin123")
-        cur.execute("INSERT INTO admins (username, password) VALUES (?, ?)",
-                    ("admin", hashed))
-        conn.commit()
-        print("Default admin created (username: admin, password: admin123)")
-    conn.close()
-
-
-create_initial_admin()
-
 # ============================================================
 # AUTH HELPERS
 # ============================================================
-def set_session_cookie(resp: RedirectResponse, username: str):
-    """Store username in the session cookie."""
-    token = serializer.dumps({"username": username, "ts": datetime.now().isoformat()})
+def set_session_cookie(resp: RedirectResponse, role: str):
+    token = serializer.dumps({"role": role, "ts": datetime.now().isoformat()})
     resp.set_cookie("session", token, httponly=True, samesite="lax")
-
 
 def clear_session_cookie(resp: RedirectResponse):
     resp.delete_cookie("session")
-
 
 def is_logged_in(request: Request) -> bool:
     token = request.cookies.get("session")
@@ -141,33 +127,21 @@ def is_logged_in(request: Request) -> bool:
         return False
     try:
         data = serializer.loads(token)
-        return "username" in data
+        return data.get("role") == "admin"
     except BadSignature:
         return False
 
-
 def require_login(request: Request):
-    """Redirect to login if not authenticated."""
     if not is_logged_in(request):
         return RedirectResponse(url="/login", status_code=302)
     return None
 
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-
 # ============================================================
-# ML HELPERS (unchanged)
+# ML HELPERS
 # ============================================================
 def allowed_file(filename: str) -> bool:
     ext = os.path.splitext(filename.lower())[1]
     return ext in ALLOWED_EXT
-
 
 def preprocess_image(image: Image.Image) -> np.ndarray:
     image = image.convert("RGB")
@@ -176,12 +150,14 @@ def preprocess_image(image: Image.Image) -> np.ndarray:
     arr = np.expand_dims(arr, axis=0)
     return arr
 
-
 def validate_xray(image: Image.Image):
-    """Validate whether image is a chest X-ray."""
+    """
+    Validate whether image is a chest X-ray.
+    Returns: (is_valid, confidence_score)
+    """
     if validator is None:
         return basic_xray_check(image), 0.0
-
+    
     try:
         img_resized = image.convert("RGB")
         img_resized = img_resized.resize((VALIDATOR_SIZE, VALIDATOR_SIZE))
@@ -194,7 +170,6 @@ def validate_xray(image: Image.Image):
         print(f"Validation error: {e}")
         return basic_xray_check(image), 0.0
 
-
 def basic_xray_check(image: Image.Image) -> bool:
     """Fallback: check image dimensions and color saturation."""
     try:
@@ -205,12 +180,11 @@ def basic_xray_check(image: Image.Image) -> bool:
         if width > height * 2.5 or height > width * 2.5:
             return False
         arr = np.array(img_rgb)
-        r, g, b = arr[:, :, 0].mean(), arr[:, :, 1].mean(), arr[:, :, 2].mean()
+        r, g, b = arr[:,:,0].mean(), arr[:,:,1].mean(), arr[:,:,2].mean()
         saturation = np.std([r, g, b])
         return saturation < 50
     except:
         return True
-
 
 def predict_image(image: Image.Image):
     """Predict pneumonia and validate X-ray."""
@@ -220,7 +194,6 @@ def predict_image(image: Image.Image):
     label = "PNEUMONIA" if p >= 0.5 else "NORMAL"
     confidence = (p if label == "PNEUMONIA" else (1 - p)) * 100
     return label, p, confidence, is_valid, validation_conf
-
 
 def save_scan_to_db(filename: str, label: str, p_pneumonia: float, confidence_percent: float) -> int:
     conn = db_connect()
@@ -240,14 +213,12 @@ def save_scan_to_db(filename: str, label: str, p_pneumonia: float, confidence_pe
     conn.close()
     return scan_id
 
-
 # ============================================================
-# 1) LOGIN SCREEN (modified to use database)
+# 1) LOGIN SCREEN
 # ============================================================
 @app.get("/login", response_class=HTMLResponse)
 def login_get(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
-
 
 @app.post("/login")
 def login_post(
@@ -255,15 +226,9 @@ def login_post(
     username: str = Form(...),
     password: str = Form(...),
 ):
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM admins WHERE username = ?", (username,))
-    user = cur.fetchone()
-    conn.close()
-
-    if user and verify_password(password, user["password"]):
+    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
         resp = RedirectResponse(url="/dashboard", status_code=302)
-        set_session_cookie(resp, username)
+        set_session_cookie(resp, "admin")
         return resp
 
     return templates.TemplateResponse(
@@ -272,21 +237,18 @@ def login_post(
         status_code=401
     )
 
-
 @app.get("/logout")
 def logout():
     resp = RedirectResponse(url="/login", status_code=302)
     clear_session_cookie(resp)
     return resp
 
-
 # ============================================================
-# 2) DASHBOARD SCREEN (unchanged except login check)
+# 2) DASHBOARD SCREEN
 # ============================================================
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/dashboard", status_code=302)
-
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
@@ -325,9 +287,8 @@ def dashboard(request: Request):
         }
     )
 
-
 # ============================================================
-# 3) UPLOAD / PREDICTION SCREEN (unchanged)
+# 3) UPLOAD / PREDICTION SCREEN
 # ============================================================
 @app.get("/scan", response_class=HTMLResponse)
 def scan_page(request: Request):
@@ -335,7 +296,6 @@ def scan_page(request: Request):
     if redirect:
         return redirect
     return templates.TemplateResponse("scan.html", {"request": request})
-
 
 @app.post("/predict")
 async def predict_route(request: Request, file: UploadFile = File(...)):
@@ -372,7 +332,7 @@ async def predict_route(request: Request, file: UploadFile = File(...)):
 
     # Predict (includes X-ray validation)
     label, p_pneumonia, confidence_percent, is_valid_xray, validation_conf = predict_image(image)
-
+    
     # Check if image is valid chest X-ray
     if not is_valid_xray:
         return templates.TemplateResponse(
@@ -406,9 +366,8 @@ async def predict_route(request: Request, file: UploadFile = File(...)):
     # Redirect to Result screen
     return RedirectResponse(url=f"/result/{scan_id}", status_code=302)
 
-
 # ============================================================
-# 4) RESULT SCREEN (unchanged)
+# 4) RESULT SCREEN
 # ============================================================
 @app.get("/result/{scan_id}", response_class=HTMLResponse)
 def result_page(request: Request, scan_id: int):
@@ -443,9 +402,8 @@ def result_page(request: Request, scan_id: int):
         }
     )
 
-
 # ============================================================
-# 5) REPORTS / HISTORY SCREEN + EXPORT CSV (unchanged)
+# 5) REPORTS / HISTORY SCREEN + EXPORT CSV
 # ============================================================
 @app.get("/reports", response_class=HTMLResponse)
 def reports_page(
@@ -494,7 +452,6 @@ def reports_page(
             "filter_q": q
         }
     )
-
 
 @app.get("/reports/export")
 def export_csv(
@@ -551,83 +508,3 @@ def export_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
-
-
-# ============================================================
-# 6) USER MANAGEMENT (optional – for adding new users)
-# ============================================================
-@app.get("/users", response_class=HTMLResponse)
-def users_page(request: Request):
-    redirect = require_login(request)
-    if redirect:
-        return redirect
-
-    conn = db_connect()
-    cur = conn.cursor()
-    cur.execute("SELECT id, username FROM admins ORDER BY id")
-    users = [dict(r) for r in cur.fetchall()]
-    conn.close()
-
-    return templates.TemplateResponse("users.html", {"request": request, "users": users})
-
-
-@app.post("/users/add")
-def add_user(
-    request: Request,
-    username: str = Form(...),
-    password: str = Form(...)
-):
-    redirect = require_login(request)
-    if redirect:
-        return redirect
-
-    hashed = hash_password(password)
-    conn = db_connect()
-    cur = conn.cursor()
-    try:
-        cur.execute("INSERT INTO admins (username, password) VALUES (?, ?)", (username, hashed))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.close()
-        return templates.TemplateResponse(
-            "users.html",
-            {"request": request, "error": "Username already exists."},
-            status_code=400
-        )
-    conn.close()
-    return RedirectResponse(url="/users", status_code=302)
-
-
-@app.post("/users/delete/{user_id}")
-def delete_user(request: Request, user_id: int):
-    redirect = require_login(request)
-    if redirect:
-        return redirect
-
-    # Prevent deleting yourself? Optional safety check.
-    token = request.cookies.get("session")
-    current_user = None
-    if token:
-        try:
-            data = serializer.loads(token)
-            current_user = data.get("username")
-        except BadSignature:
-            pass
-
-    conn = db_connect()
-    cur = conn.cursor()
-    # Get username of the user to be deleted
-    cur.execute("SELECT username FROM admins WHERE id = ?", (user_id,))
-    user = cur.fetchone()
-    if user and user["username"] == current_user:
-        conn.close()
-        return templates.TemplateResponse(
-            "users.html",
-            {"request": request, "error": "You cannot delete your own account."},
-            status_code=400
-        )
-
-    cur.execute("DELETE FROM admins WHERE id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-    return RedirectResponse(url="/users", status_code=302)
