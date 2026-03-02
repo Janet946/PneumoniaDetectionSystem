@@ -3,8 +3,17 @@
 {% set single = true %}
 {% block content %}
 <section class="card">
-  <h1>Dashboard</h1>
-  <p class="muted">System overview (latest statistics and recent scans).</p>
+  <div style="text-align: center; margin-bottom: 40px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px;">
+    <h1 style="font-size: 42px; color: #ffffff; margin: 0; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.2);">Welcome, {{ username.replace('_', ' ') | title }}!</h1>
+  </div>
+
+  {% if is_admin %}
+    <h1>Admin Dashboard</h1>
+    <p class="muted">System overview - All scans and per-doctor statistics.</p>
+  {% else %}
+    <h1>Your Dashboard</h1>
+    <p class="muted">Your scan statistics and recent scans.</p>
+  {% endif %}
 
   <div class="grid3">
     <div class="stat">
@@ -23,12 +32,38 @@
 
   <div class="hr"></div>
 
+  {% if is_admin and doctor_stats %}
+  <h2>Doctor Statistics</h2>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Doctor</th><th>Total Scans</th><th>Pneumonia Cases</th><th>Pneumonia Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for doctor in doctor_stats %}
+        <tr>
+          <td><strong>{{ doctor.username }}</strong></td>
+          <td>{{ doctor.count }}</td>
+          <td>{{ doctor.pneumonia_count }}</td>
+          <td>{{ ((doctor.pneumonia_count / doctor.count) * 100)|round(2) if doctor.count > 0 else 0 }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="hr"></div>
+  {% endif %}
+
   <h2>Recent Scans</h2>
   <div class="table-wrap">
     <table class="table">
       <thead>
         <tr>
-          <th>ID</th><th>Time</th><th>File</th><th>Label</th><th>Confidence</th><th></th>
+          <th>ID</th><th>Time</th>
+          {% if is_admin %}<th>Doctor</th>{% endif %}
+          <th>File</th><th>Label</th><th>Confidence</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -36,6 +71,7 @@
         <tr>
           <td>{{ r.id }}</td>
           <td class="muted">{{ r.timestamp }}</td>
+          {% if is_admin %}<td>{{ r.username }}</td>{% endif %}
           <td><code>{{ r.filename }}</code></td>
           <td>
             <span class="pill {{ 'bad' if r.predicted_label=='PNEUMONIA' else 'good' }}">

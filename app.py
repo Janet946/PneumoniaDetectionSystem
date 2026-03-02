@@ -4,7 +4,7 @@ import csv
 import sqlite3
 from datetime import datetime
 from typing import Optional
-from itsdangerous import URLSafeSerializer
+from itsdangerous import URLSafeSerializer, BadSignature
 
 import numpy as np
 import tensorflow as tf
@@ -40,6 +40,19 @@ MAX_FILE_MB = 10
 # Demo admin credentials (change before submission)
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
+
+# Doctor credentials
+DOCTOR_CREDENTIALS = {
+    "dr_dube": "dube@2024",
+    "dr_moyo": "moyo@2024",
+    "dr_sibanda": "sibanda@2024"
+}
+
+# All valid users
+VALID_USERS = {
+    ADMIN_USERNAME: ADMIN_PASSWORD,
+    **DOCTOR_CREDENTIALS
+}
 
 # Session secret (change to a long random string)
 SESSION_SECRET = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"
@@ -84,7 +97,7 @@ def db_init():
     conn = db_connect()
     cur = conn.cursor()
 
-    # Scans table
+    # Scans table with username tracking
     cur.execute("""
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,9 +105,22 @@ def db_init():
             filename TEXT NOT NULL,
             predicted_label TEXT NOT NULL,
             p_pneumonia REAL NOT NULL,
-            confidence_percent REAL NOT NULL
+            confidence_percent REAL NOT NULL,
+            username TEXT NOT NULL
         )
     """)
+
+    # Migrate existing scans table if needed (add username column if missing)
+    try:
+        cur.execute("PRAGMA table_info(scans)")
+        columns = [row[1] for row in cur.fetchall()]
+        if 'username' not in columns:
+            print("Migrating scans table: adding username column...")
+            cur.execute("ALTER TABLE scans ADD COLUMN username TEXT DEFAULT 'admin'")
+            conn.commit()
+            print("✓ Migration complete: username column added")
+    except Exception as e:
+        print(f"⚠ Migration note: {e}")
 
     # NEW: Admins table
     cur.execute("""
@@ -114,8 +140,8 @@ db_init()
 # ============================================================
 # AUTH HELPERS
 # ============================================================
-def set_session_cookie(resp: RedirectResponse, role: str):
-    token = serializer.dumps({"role": role, "ts": datetime.now().isoformat()})
+def set_session_cookie(resp: RedirectResponse, username: str):
+    token = serializer.dumps({"username": username, "ts": datetime.now().isoformat()})
     resp.set_cookie("session", token, httponly=True, samesite="lax")
 
 def clear_session_cookie(resp: RedirectResponse):
@@ -127,11 +153,23 @@ def is_logged_in(request: Request) -> bool:
         return False
     try:
         data = serializer.loads(token)
-        return data.get("role") == "admin"
+        return data.get("username") in VALID_USERS
     except BadSignature:
         return False
 
+def get_logged_in_user(request: Request) -> Optional[str]:
+    """Extract username from session cookie."""
+    token = request.cookies.get("session")
+    if not token:
+        return None
+    try:
+        data = serializer.loads(token)
+        return data.get("username")
+    except BadSignature:
+        return None
+
 def require_login(request: Request):
+    """Redirect to login if not authenticated."""
     if not is_logged_in(request):
         return RedirectResponse(url="/login", status_code=302)
     return None
@@ -155,36 +193,67 @@ def validate_xray(image: Image.Image):
     Validate whether image is a chest X-ray.
     Returns: (is_valid, confidence_score)
     """
-    if validator is None:
-        return basic_xray_check(image), 0.0
-    
-    try:
-        img_resized = image.convert("RGB")
-        img_resized = img_resized.resize((VALIDATOR_SIZE, VALIDATOR_SIZE))
-        arr = np.array(img_resized).astype("float32") / 255.0
-        arr = np.expand_dims(arr, axis=0)
-        validation_prob = float(validator.predict(arr, verbose=0)[0][0])
-        is_valid = validation_prob > 0.5
-        return is_valid, validation_prob
-    except Exception as e:
-        print(f"Validation error: {e}")
-        return basic_xray_check(image), 0.0
+    is_xray = check_if_xray(image)
+    if not is_xray:
+        return False, 0.0
+    return True, 1.0
 
-def basic_xray_check(image: Image.Image) -> bool:
-    """Fallback: check image dimensions and color saturation."""
+def check_if_xray(image: Image.Image) -> bool:
+    """
+    Check if image is likely a chest X-ray by analyzing color distribution.
+    X-rays are grayscale medical images.
+    Selfies/photos have colors (skin tones, backgrounds, etc).
+    """
     try:
         img_rgb = image.convert("RGB")
         width, height = img_rgb.size
-        if width < 100 or height < 100:
+        
+        # Size checks
+        if width < 80 or height < 80:
             return False
-        if width > height * 2.5 or height > width * 2.5:
+        if width > 5000 or height > 5000:
             return False
-        arr = np.array(img_rgb)
-        r, g, b = arr[:,:,0].mean(), arr[:,:,1].mean(), arr[:,:,2].mean()
-        saturation = np.std([r, g, b])
-        return saturation < 50
-    except:
+        
+        # Convert to array
+        arr = np.array(img_rgb).astype(float)
+        r, g, b = arr[:,:,0], arr[:,:,1], arr[:,:,2]
+        
+        # Key insight: X-rays are GRAYSCALE
+        # In true grayscale: R ≈ G ≈ B
+        # In photos/selfies: R, G, B vary significantly (skin has more red, etc)
+        
+        # Calculate how different RGB channels are
+        # For each pixel, calculate max difference between channels
+        diff_rg = np.abs(r - g)
+        diff_gb = np.abs(g - b)
+        diff_rb = np.abs(r - b)
+        
+        # Average pixel-wise differences
+        avg_color_diff = (diff_rg.mean() + diff_gb.mean() + diff_rb.mean()) / 3
+        
+        # If average color difference is LOW = grayscale (X-ray)
+        # If average color difference is HIGH = colorful (selfie)
+        # X-rays: avg_color_diff typically < 15
+        # Selfies: avg_color_diff typically > 25
+        
+        if avg_color_diff > 18:  # Threshold: reject if too colorful
+            return False
+        
+        # Also check brightness is reasonable for medical image
+        brightness = arr.mean()
+        if brightness < 20 or brightness > 230:
+            return False
+        
+        # Check that image has contrast (not a blank image)
+        contrast = arr.std()
+        if contrast < 10:
+            return False
+        
         return True
+        
+    except Exception as e:
+        print(f"X-ray validation error: {e}")
+        return False
 
 def predict_image(image: Image.Image):
     """Predict pneumonia and validate X-ray."""
@@ -195,18 +264,19 @@ def predict_image(image: Image.Image):
     confidence = (p if label == "PNEUMONIA" else (1 - p)) * 100
     return label, p, confidence, is_valid, validation_conf
 
-def save_scan_to_db(filename: str, label: str, p_pneumonia: float, confidence_percent: float) -> int:
+def save_scan_to_db(filename: str, label: str, p_pneumonia: float, confidence_percent: float, username: str) -> int:
     conn = db_connect()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO scans (timestamp, filename, predicted_label, p_pneumonia, confidence_percent)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO scans (timestamp, filename, predicted_label, p_pneumonia, confidence_percent, username)
+        VALUES (?, ?, ?, ?, ?, ?)
     """, (
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         filename,
         label,
         float(p_pneumonia),
         float(confidence_percent),
+        username,
     ))
     conn.commit()
     scan_id = cur.lastrowid
@@ -226,9 +296,10 @@ def login_post(
     username: str = Form(...),
     password: str = Form(...),
 ):
-    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+    # Check if username and password match any valid user
+    if username in VALID_USERS and VALID_USERS[username] == password:
         resp = RedirectResponse(url="/dashboard", status_code=302)
-        set_session_cookie(resp, "admin")
+        set_session_cookie(resp, username)
         return resp
 
     return templates.TemplateResponse(
@@ -256,36 +327,86 @@ def dashboard(request: Request):
     if redirect:
         return redirect
 
+    username = get_logged_in_user(request)
+    is_admin = username == ADMIN_USERNAME
+
     conn = db_connect()
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) AS total FROM scans")
-    total = cur.fetchone()["total"]
+    if is_admin:
+        # Admin sees all scans
+        cur.execute("SELECT COUNT(*) AS total FROM scans")
+        total = cur.fetchone()["total"]
 
-    cur.execute("SELECT COUNT(*) AS pneu FROM scans WHERE predicted_label='PNEUMONIA'")
-    pneu = cur.fetchone()["pneu"]
+        cur.execute("SELECT COUNT(*) AS pneu FROM scans WHERE predicted_label='PNEUMONIA'")
+        pneu = cur.fetchone()["pneu"]
 
-    rate = round((pneu / total) * 100, 2) if total else 0.0
+        rate = round((pneu / total) * 100, 2) if total else 0.0
 
-    cur.execute("""
-        SELECT id, timestamp, filename, predicted_label, p_pneumonia, confidence_percent
-        FROM scans
-        ORDER BY id DESC
-        LIMIT 10
-    """)
-    recent = [dict(r) for r in cur.fetchall()]
-    conn.close()
+        cur.execute("""
+            SELECT id, timestamp, filename, predicted_label, p_pneumonia, confidence_percent, username
+            FROM scans
+            ORDER BY id DESC
+            LIMIT 10
+        """)
+        recent = [dict(r) for r in cur.fetchall()]
 
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "total_scans": total,
-            "pneumonia_scans": pneu,
-            "pneumonia_rate": rate,
-            "recent": recent,
-        }
-    )
+        # Get per-doctor statistics
+        cur.execute("""
+            SELECT username, COUNT(*) as count, 
+                   SUM(CASE WHEN predicted_label='PNEUMONIA' THEN 1 ELSE 0 END) as pneumonia_count
+            FROM scans
+            GROUP BY username
+        """)
+        doctor_stats = [dict(r) for r in cur.fetchall()]
+
+        conn.close()
+
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {
+                "request": request,
+                "is_admin": is_admin,
+                "username": username,
+                "total_scans": total,
+                "pneumonia_scans": pneu,
+                "pneumonia_rate": rate,
+                "recent": recent,
+                "doctor_stats": doctor_stats,
+            }
+        )
+    else:
+        # Doctor sees only their scans
+        cur.execute("SELECT COUNT(*) AS total FROM scans WHERE username=?", (username,))
+        total = cur.fetchone()["total"]
+
+        cur.execute("SELECT COUNT(*) AS pneu FROM scans WHERE username=? AND predicted_label='PNEUMONIA'", (username,))
+        pneu = cur.fetchone()["pneu"]
+
+        rate = round((pneu / total) * 100, 2) if total else 0.0
+
+        cur.execute("""
+            SELECT id, timestamp, filename, predicted_label, p_pneumonia, confidence_percent
+            FROM scans
+            WHERE username=?
+            ORDER BY id DESC
+            LIMIT 10
+        """, (username,))
+        recent = [dict(r) for r in cur.fetchall()]
+        conn.close()
+
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {
+                "request": request,
+                "is_admin": is_admin,
+                "username": username,
+                "total_scans": total,
+                "pneumonia_scans": pneu,
+                "pneumonia_rate": rate,
+                "recent": recent,
+            }
+        )
 
 # ============================================================
 # 3) UPLOAD / PREDICTION SCREEN
@@ -356,11 +477,13 @@ async def predict_route(request: Request, file: UploadFile = File(...)):
         f.write(contents)
 
     # Save to DB
+    username = get_logged_in_user(request)
     scan_id = save_scan_to_db(
         filename=stamped_name,
         label=label,
         p_pneumonia=p_pneumonia,
-        confidence_percent=confidence_percent
+        confidence_percent=confidence_percent,
+        username=username
     )
 
     # Redirect to Result screen
