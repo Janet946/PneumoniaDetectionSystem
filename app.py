@@ -236,17 +236,17 @@ def check_if_xray(image: Image.Image) -> bool:
         # X-rays: avg_color_diff typically < 15
         # Selfies: avg_color_diff typically > 25
         
-        if avg_color_diff > 18:  # Threshold: reject if too colorful
+        if avg_color_diff > 25:  # RELAXED threshold - allow more variations
             return False
         
         # Also check brightness is reasonable for medical image
         brightness = arr.mean()
-        if brightness < 20 or brightness > 230:
+        if brightness < 10 or brightness > 240:  # More lenient brightness
             return False
         
         # Check that image has contrast (not a blank image)
         contrast = arr.std()
-        if contrast < 10:
+        if contrast < 5:  # More lenient contrast check
             return False
         
         return True
@@ -260,8 +260,15 @@ def predict_image(image: Image.Image):
     is_valid, validation_conf = validate_xray(image)
     x = preprocess_image(image)
     p = float(model.predict(x, verbose=0)[0][0])
+    
+    # Use 0.5 as threshold (standard for binary classification)
+    # Confidence closer to 0 or 1 means model is more certain
     label = "PNEUMONIA" if p >= 0.5 else "NORMAL"
     confidence = (p if label == "PNEUMONIA" else (1 - p)) * 100
+    
+    # Make confidence at least 50% (model always makes a decision)
+    confidence = max(confidence, 50.0)
+    
     return label, p, confidence, is_valid, validation_conf
 
 def save_scan_to_db(filename: str, label: str, p_pneumonia: float, confidence_percent: float, username: str) -> int:
